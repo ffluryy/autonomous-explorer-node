@@ -5,6 +5,10 @@ from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 import numpy as np
+from collections import deque
+from tf_transformations import quaternion_from_euler
+from geometry_msgs.msg import Quaternion
+import math
 
 
 class ExplorerNode(Node):
@@ -29,6 +33,8 @@ class ExplorerNode(Node):
         # Timer for periodic exploration
         self.timer = self.create_timer(5.0, self.explore)
 
+        self.previous_frontier = None
+
     def map_callback(self, msg):
         self.map_data = msg
         self.get_logger().info("Map received")
@@ -42,7 +48,22 @@ class ExplorerNode(Node):
         goal_msg.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.position.x = x
         goal_msg.pose.position.y = y
-        goal_msg.pose.orientation.w = 1.0  # Facing forward
+        
+        #### WIP: not as robot_position not being updated
+        ### set goal orientation to face in direction from initial_pos to final_pos
+        ### to reduce unnecessary rotations
+        ### if you don't set this parameter, robot will automatically face front everytime it reaches goal
+        # Calculate the yaw angle to face the goal
+        robot_x, robot_y = self.robot_position
+        yaw = math.atan2(y - robot_y, x - robot_x)
+        # Convert the yaw angle to a quaternion
+        quaternion = quaternion_from_euler(0, 0, yaw)
+        goal_msg.pose.orientation = Quaternion(
+            x=quaternion[0],
+            y=quaternion[1],
+            z=quaternion[2],
+            w=quaternion[3]
+        )
 
         nav_goal = NavigateToPose.Goal()
         nav_goal.pose = goal_msg
@@ -82,43 +103,90 @@ class ExplorerNode(Node):
 
     def find_frontiers(self, map_array):
         """
-        Detect frontiers in the occupancy grid map.
+        Detect frontiers in the occupancy grid map using BFS.
         """
         frontiers = []
         rows, cols = map_array.shape
+        visited = np.zeros_like(map_array, dtype=bool)
+        queue = deque()
 
-        # Iterate through each cell in the map
-        for r in range(1, rows - 1):
-            for c in range(1, cols - 1):
-                if map_array[r, c] == 0:  # Free cell
-                    # Check if any neighbors are unknown
-                    neighbors = map_array[r-1:r+2, c-1:c+2].flatten()
-                    if -1 in neighbors:
-                        frontiers.append((r, c))
+        # Start BFS from the robot's position
+        robot_row, robot_col = self.robot_position
+        queue.append((robot_row, robot_col))
+        visited[robot_row, robot_col] = True
+
+        while queue:
+            r, c = queue.popleft()
+
+            # Check if the current cell is a frontier
+            if map_array[r, c] == 0:  # Free cell
+                neighbors = map_array[r-1:r+2, c-1:c+2].flatten()
+                if -1 in neighbors:
+                    frontiers.append((r, c))
+
+            # Add neighbors to the queue
+            for dr in [-1, 0, 1]:
+                for dc in [-1, 0, 1]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < rows and 0 <= nc < cols and not visited[nr, nc]:
+                        visited[nr, nc] = True
+                        queue.append((nr, nc))
 
         self.get_logger().info(f"Found {len(frontiers)} frontiers")
         return frontiers
 
-    def choose_frontier(self, frontiers):
+    def choose_frontier(self, frontiers, map_array):
         """
-        Choose the closest frontier to the robot.
+        Choose the best frontier to explore based on distance, number of unknown cells around it, and direction.
         """
         robot_row, robot_col = self.robot_position
-        min_distance = float('inf')
+        min_score = float('inf')
         chosen_frontier = None
-        
 
         for frontier in frontiers:
             if frontier in self.visited_frontiers:
                 continue
 
+            # Calculate distance to the robot
             distance = np.sqrt((robot_row - frontier[0])**2 + (robot_col - frontier[1])**2)
-            if distance < min_distance:
-                min_distance = distance
+
+            # Calculate the number of unknown cells around the frontier
+            r, c = frontier
+            neighbors = map_array[r-1:r+2, c-1:c+2].flatten()
+            unknown_count = np.sum(neighbors == -1)
+
+            # Check for obstacles around the frontier
+            obstacle_free = True
+            check_range = 15
+            for i in range(r-check_range, r + check_range):
+                for j in range(c-check_range, c + check_range):
+                    try: # try-except to reject frontiers too close to boundary of map
+                        if map_array[i, j] == 100:  # Assuming 100 represents an obstacle
+                            obstacle_free = False
+                            break
+                    except:
+                        break
+                if not obstacle_free:
+                    break
+
+            if not obstacle_free:
+                continue
+
+            # Calculate a score based on distance, unknown count, and direction
+            direction_penalty = 0
+            if self.previous_frontier:
+                prev_r, prev_c = self.previous_frontier
+                direction_penalty = np.sqrt((prev_r - r)**2 + (prev_c - c)**2)
+
+            score = distance - unknown_count + direction_penalty  # Adjust the weights as needed
+
+            if score < min_score:
+                min_score = score
                 chosen_frontier = frontier
 
         if chosen_frontier:
             self.visited_frontiers.add(chosen_frontier)
+            self.previous_frontier = chosen_frontier
             self.get_logger().info(f"Chosen frontier: {chosen_frontier}")
         else:
             self.get_logger().warning("No valid frontier found")
@@ -146,7 +214,7 @@ class ExplorerNode(Node):
             return
 
         # Choose the closest frontier
-        chosen_frontier = self.choose_frontier(frontiers)
+        chosen_frontier = self.choose_frontier(frontiers, map_array)
 
         if not chosen_frontier:
             self.get_logger().warning("No frontiers to explore")
