@@ -9,6 +9,9 @@ class RvizMarker(Node):
         self.marker_pub = self.create_publisher(Marker, 'frontier_chosen_marker', 10)
         self.marker_array_pub = self.create_publisher(MarkerArray, 'frontier_all_marker', 10)
 
+        # used for deleting previous markers
+        self.prev_marker_array = None
+
     def update_map_consts(self, map_res, map_origin_x, map_origin_y):
         self.map_res = map_res
         self.map_origin_x = map_origin_x
@@ -22,7 +25,7 @@ class RvizMarker(Node):
             marker_type=Marker.SPHERE,  
             orientation = (0.0, 0.0, 0.0, 1.0), 
             scale = (0.2, 0.2, 0.2), 
-            color = (0.0, 0.6, 0.1, 0.1) #RGB-Alpha
+            color = (0.0, 0.6, 0.1, 0.4) #RGB-Alpha
             ):
         marker = Marker()
         marker.header.frame_id = frame_id
@@ -33,7 +36,7 @@ class RvizMarker(Node):
         marker.action = Marker.ADD
         marker.pose.position.x = float(position[1] * self.map_res + self.map_origin_x)
         marker.pose.position.y = float(position[0] * self.map_res + self.map_origin_y)
-        marker.pose.position.z = 0.0 #we don't have z axis in this project
+        marker.pose.position.z = 0.0 # we don't have z axis in this project
         marker.pose.orientation.x = orientation[0]
         marker.pose.orientation.y = orientation[1]
         marker.pose.orientation.z = orientation[2]
@@ -56,9 +59,25 @@ class RvizMarker(Node):
             color=(0.6, 0.0, 0.1, 1.0), 
             scale=(0.6, 0.6, 0.6)))
 
+    def delete_marker_array(self, marker_array):
+        for marker in marker_array.markers:
+            marker.action = Marker.DELETE
+        self.marker_array_pub.publish(marker_array)
+
     def publish_marker_array(self, frontiers_list):
         self.get_logger().info(f"Publishing markers")
         marker_array = MarkerArray()
+
+        # set id for each marker
+        # apparently causes issues if all ids are the same
+        # only show every 50th marker (reduce render load)
+        if len(frontiers_list) > 100: frontiers_list = frontiers_list[::100]
         for i, frontier in enumerate(frontiers_list):
             marker_array.markers.append(self.create_marker(marker_id=i, position=frontier))
+            # self.get_logger().info(f"Marker {i} at frontier {frontier[1] * self.map_res + self.map_origin_x}, {frontier[0] * self.map_res + self.map_origin_x}")
+
+        if self.prev_marker_array != None:
+            self.delete_marker_array(self.prev_marker_array)
+
+        self.prev_marker_array = marker_array
         self.marker_array_pub.publish(marker_array)

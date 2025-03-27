@@ -44,6 +44,8 @@ class ExplorerNode(Node):
         # until 0
         self.min_score = 200.0
 
+        self.ignored_frontiers = []
+
     def map_callback(self, msg):
         if not self.map_data:
             self.frontier_marker.update_map_consts(
@@ -135,7 +137,7 @@ class ExplorerNode(Node):
             # Check if the current cell is a frontier
             if map_array[r, c] == 0:  # Free cell
                 neighbors = map_array[r-1:r+2, c-1:c+2].flatten()
-                if -1 in neighbors:
+                if -1 in neighbors and (r, c) not in self.ignored_frontiers:
                     frontiers.append((r, c))
 
             # Add neighbors to the queue
@@ -147,7 +149,7 @@ class ExplorerNode(Node):
                         queue.append((nr, nc))
 
         self.get_logger().info(f"Found {len(frontiers)} frontiers")
-        self.frontier_marker.publish_marker_array(frontiers)
+        # self.frontier_marker.publish_marker_array(frontiers)
         return frontiers
 
     def choose_frontier(self, frontiers, map_array):
@@ -157,9 +159,15 @@ class ExplorerNode(Node):
         robot_row, robot_col = self.robot_position
         chosen_frontier = None
 
+        # compute every 100 frontiers to reduce computation time
+        # only do this if there are more than 100 frontiers
+        # if len(frontiers) > 100: frontiers = frontiers[::100]
+
         for frontier in frontiers:
             if frontier in self.visited_frontiers:
                 continue
+
+            self.get_logger().info(f"robot row col {robot_row} {robot_col}")
 
             # Calculate distance to the robot
             distance = np.sqrt((robot_row - frontier[0])**2 + (robot_col - frontier[1])**2)
@@ -171,7 +179,7 @@ class ExplorerNode(Node):
 
             # Check for obstacles around the frontier
             obstacle_free = True
-            check_range = 1
+            check_range = 5
             for i in range(r-check_range, r + check_range):
                 for j in range(c-check_range, c + check_range):
                     try: # try-except to reject frontiers too close to boundary of map
@@ -185,6 +193,7 @@ class ExplorerNode(Node):
 
             if not obstacle_free:
                 # self.get_logger().info(f"Frontier at ({r}, {c}) is too close to an obstacle")
+                self.ignored_frontiers.append(frontier) # add to ignored frontiers so find_frontiers() will ignore it
                 continue
 
             # Calculate a score based on distance, unknown count, and direction
@@ -193,7 +202,7 @@ class ExplorerNode(Node):
                 prev_r, prev_c = self.previous_frontier
                 direction_penalty = np.sqrt((prev_r - r)**2 + (prev_c - c)**2)
 
-            score = distance + unknown_count #+ direction_penalty  # Adjust the weights as needed
+            score = distance + unknown_count - 2.0*direction_penalty  # Extra emphasis on direction penalty (wastes a lot of time doing u turns)
 
             # self.get_logger().info(f"score { score }")
 
@@ -207,7 +216,7 @@ class ExplorerNode(Node):
             self.visited_frontiers.add(chosen_frontier)
             self.previous_frontier = chosen_frontier
             self.get_logger().info(f"Chosen frontier: {chosen_frontier}")
-            self.frontier_marker.publish_marker(chosen_frontier=chosen_frontier)
+            # self.frontier_marker.publish_marker(chosen_frontier=chosen_frontier)
         elif self.min_score >= 0:
                 self.min_score *= 0.6
                 self.min_score -= 1.0
@@ -232,10 +241,6 @@ class ExplorerNode(Node):
 
         if not frontiers:
             self.get_logger().info("No frontiers found. Exploration complete!")
-
-
-
-            # self.shutdown_robot()
             return
 
         # Choose the closest frontier
@@ -251,12 +256,6 @@ class ExplorerNode(Node):
 
         # Navigate to the chosen frontier
         self.navigate_to(goal_x, goal_y)
-
-    # def shudown_robot(self):
-    #     
-    #
-    #
-    #     self.get_logger().info("Shutting down robot exploration")
 
 
 def main(args=None):
