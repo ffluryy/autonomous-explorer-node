@@ -31,9 +31,14 @@ class ExplorerNode(Node):
         self.robot_position = (0, 0)  # Placeholder, update from localization
 
         # Timer for periodic exploration
-        self.timer = self.create_timer(5.0, self.explore)
+        self.timer = self.create_timer(10.0, self.explore)
 
         self.previous_frontier = None
+
+        # min score for frontier to be considered
+        # will be decremented if no valid_frontier is found
+        # until 0
+        self.min_score = 200.0 # needs tuning!
 
     def map_callback(self, msg):
         self.map_data = msg
@@ -140,7 +145,6 @@ class ExplorerNode(Node):
         Choose the best frontier to explore based on distance, number of unknown cells around it, and direction.
         """
         robot_row, robot_col = self.robot_position
-        min_score = float('inf')
         chosen_frontier = None
 
         for frontier in frontiers:
@@ -157,7 +161,7 @@ class ExplorerNode(Node):
 
             # Check for obstacles around the frontier
             obstacle_free = True
-            check_range = 15
+            check_range = 1
             for i in range(r-check_range, r + check_range):
                 for j in range(c-check_range, c + check_range):
                     try: # try-except to reject frontiers too close to boundary of map
@@ -170,6 +174,7 @@ class ExplorerNode(Node):
                     break
 
             if not obstacle_free:
+                # self.get_logger().info(f"Frontier at ({r}, {c}) is too close to an obstacle")
                 continue
 
             # Calculate a score based on distance, unknown count, and direction
@@ -178,16 +183,24 @@ class ExplorerNode(Node):
                 prev_r, prev_c = self.previous_frontier
                 direction_penalty = np.sqrt((prev_r - r)**2 + (prev_c - c)**2)
 
-            score = distance - unknown_count + direction_penalty  # Adjust the weights as needed
+            score = distance + unknown_count #+ direction_penalty  # Adjust the weights as needed
 
-            if score < min_score:
+            # self.get_logger().info(f"score { score }")
+
+            min_score = self.min_score
+            if score > min_score:
                 min_score = score
                 chosen_frontier = frontier
+                self.get_logger().info(f"chosen frontier w score { score }")
 
         if chosen_frontier:
             self.visited_frontiers.add(chosen_frontier)
             self.previous_frontier = chosen_frontier
             self.get_logger().info(f"Chosen frontier: {chosen_frontier}")
+        elif self.min_score >= 0:
+                self.min_score *= 0.6
+                self.min_score -= 1.0
+                self.get_logger().info(f"min_score decremented to { self.min_score }")
         else:
             self.get_logger().warning("No valid frontier found")
 
