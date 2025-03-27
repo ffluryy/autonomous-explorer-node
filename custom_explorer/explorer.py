@@ -9,7 +9,7 @@ from collections import deque
 from tf_transformations import quaternion_from_euler
 from geometry_msgs.msg import Quaternion
 import math
-from visualization_msgs.msg import Marker
+import custom_explorer.rviz_marker as rviz_marker
 
 
 class ExplorerNode(Node):
@@ -25,8 +25,7 @@ class ExplorerNode(Node):
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
         # Publisher for the chosen frontier marker
-        self.marker_pub = self.create_publisher(Marker, '/chosen_frontier_marker', 10)
-
+        self.frontier_marker = rviz_marker.RvizMarker()
 
         # Visited frontiers set
         self.visited_frontiers = set()
@@ -43,11 +42,16 @@ class ExplorerNode(Node):
         # min score for frontier to be considered
         # will be decremented if no valid_frontier is found
         # until 0
-        self.min_score = 200.0 # needs tuning!
+        self.min_score = 200.0
 
     def map_callback(self, msg):
+        if not self.map_data:
+            self.frontier_marker.update_map_consts(
+                msg.info.resolution,
+                msg.info.origin.position.x, msg.info.origin.position.y)
+                
         self.map_data = msg
-        self.get_logger().info("Map received")
+        # self.get_logger().info("Map received")
 
     def navigate_to(self, x, y):
         """
@@ -143,6 +147,7 @@ class ExplorerNode(Node):
                         queue.append((nr, nc))
 
         self.get_logger().info(f"Found {len(frontiers)} frontiers")
+        self.frontier_marker.publish_marker_array(frontiers)
         return frontiers
 
     def choose_frontier(self, frontiers, map_array):
@@ -202,7 +207,7 @@ class ExplorerNode(Node):
             self.visited_frontiers.add(chosen_frontier)
             self.previous_frontier = chosen_frontier
             self.get_logger().info(f"Chosen frontier: {chosen_frontier}")
-            self.publish_chosen_frontier_marker(chosen_frontier)
+            self.frontier_marker.publish_marker(chosen_frontier=chosen_frontier)
         elif self.min_score >= 0:
                 self.min_score *= 0.6
                 self.min_score -= 1.0
@@ -211,35 +216,6 @@ class ExplorerNode(Node):
             self.get_logger().warning("No valid frontier found")
 
         return chosen_frontier
-
-    def publish_chosen_frontier_marker(self, frontier):
-        """
-        Publish the chosen frontier as a marker to visualize in RViz.
-        """
-        self.get_logger().info(f"Publishing chosen frontier marker {frontier[0]} {frontier[1]}")
-        marker = Marker()
-        marker.header.frame_id = "map"  # Replace with your map frame
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = "chosen_frontier"
-        marker.id = 0
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-        marker.pose.position.x = float(frontier[1] * self.map_data.info.resolution + self.map_data.info.origin.position.x)
-        marker.pose.position.y = float(frontier[0] * self.map_data.info.resolution + self.map_data.info.origin.position.y)
-        marker.pose.position.z = 0.0
-        marker.pose.orientation.x = 0.0
-        marker.pose.orientation.y = 0.0
-        marker.pose.orientation.z = 0.0
-        marker.pose.orientation.w = 1.0
-        marker.scale.x = 0.2
-        marker.scale.y = 0.2
-        marker.scale.z = 0.2
-        marker.color.a = 0.5  # Alpha (transparency)
-        marker.color.r = 0.0  # Red
-        marker.color.g = 0.6  # Green
-        marker.color.b = 0.0  # Blue
-
-        self.marker_pub.publish(marker)
     
 
     def explore(self):
