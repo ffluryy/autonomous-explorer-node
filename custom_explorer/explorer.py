@@ -3,12 +3,14 @@ from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
+
 from rclpy.action import ActionClient
 import numpy as np
 from collections import deque
 from tf_transformations import quaternion_from_euler
 from geometry_msgs.msg import Quaternion
 import math
+from nav_msgs.msg import Odometry
 import custom_explorer.rviz_marker as rviz_marker
 
 
@@ -23,6 +25,10 @@ class ExplorerNode(Node):
 
         # Action client for navigation
         self.nav_to_pose_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+
+        # Subscriber to the odometry topic
+        self.odom_sub = self.create_subscription(
+            Odometry, '/odom', self.odom_callback, 10)
 
         # Publisher for the chosen frontier marker
         self.frontier_marker = rviz_marker.RvizMarker()
@@ -45,6 +51,14 @@ class ExplorerNode(Node):
         self.min_score = 200.0
 
         self.ignored_frontiers = []
+
+    def odom_callback(self, msg):
+        """
+        Update the robot's position from the odometry data.
+        """
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        self.robot_position = (x, y)
 
     def map_callback(self, msg):
         if not self.map_data:
@@ -127,7 +141,9 @@ class ExplorerNode(Node):
         queue = deque()
 
         # Start BFS from the robot's position
-        robot_row, robot_col = self.robot_position
+        robot_row = int(self.robot_position[0])
+        robot_col = int(self.robot_position[1])
+        self.get_logger().info(f"Robot position: ({robot_row}, {robot_col})")
         queue.append((robot_row, robot_col))
         visited[robot_row, robot_col] = True
 
